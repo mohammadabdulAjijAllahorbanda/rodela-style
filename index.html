@@ -321,8 +321,8 @@ body.checkout-open #mobileAdminBtn{display:none!important;visibility:hidden!impo
 
 <div class="login-screen" id="loginScreen">
   <form class="login-card" id="loginForm">
-    <div class="eyebrow">Rodela Style</div><h2>Owner Login</h2><p>Enter your local owner credentials to open the management console.</p>
-    <div class="field"><label>Username</label><input id="loginUser" autocomplete="username" required></div>
+    <div class="eyebrow">Rodela Style</div><h2>Owner Login</h2><p>Use your Supabase owner email and password to enable secure cloud editing and image uploads.</p>
+    <div class="field"><label>Supabase owner email</label><input id="loginUser" type="email" autocomplete="username" required></div>
     <div class="field" style="margin-top:12px"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password" required></div>
     <div class="login-error" id="loginError"></div>
     <div class="admin-actions"><button type="button" class="btn btn-outline" onclick="closeAdminLogin()">Cancel</button><button class="btn btn-primary">Login</button></div>
@@ -428,6 +428,17 @@ const supabaseClient = (SUPABASE_URL.startsWith("https://") && !SUPABASE_PUBLISH
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY) : null;
 let supabaseReady = false;
 let supabaseSyncing = false;
+const RODELA_OWNER_UID = "c62aee4c-0add-4c92-aafe-1d8ed116fbd1";
+let supabaseOwnerSession = null;
+
+async function currentAccessToken(){
+  if(!supabaseClient) return SUPABASE_PUBLISHABLE_KEY;
+  try{
+    const {data:{session}} = await supabaseClient.auth.getSession();
+    if(session?.access_token){supabaseOwnerSession=session;return session.access_token;}
+  }catch(err){console.warn("Could not read Supabase session",err);}
+  return SUPABASE_PUBLISHABLE_KEY;
+}
 
 const FALLBACK_IMG = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1100" viewBox="0 0 900 1100">
@@ -880,9 +891,10 @@ function openProductForm(id=null){
 
 async function cloudFetch(path, options={}){
   if(!supabaseClient) throw new Error("Add the Rodela Style Supabase URL and publishable key in index.html first.");
+  const token=await currentAccessToken();
   const headers={
     apikey:SUPABASE_PUBLISHABLE_KEY,
-    Authorization:'Bearer '+SUPABASE_PUBLISHABLE_KEY,
+    Authorization:'Bearer '+token,
     ...((options.body!==undefined)?{'Content-Type':'application/json'}:{}),
     ...(options.headers||{})
   };
@@ -930,9 +942,11 @@ function cloudPayload(p){
 async function uploadCloudImage(file){
   if(!file || !file.type || !file.type.startsWith('image/')) throw new Error('Choose a valid image file.');
   const ext=(file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
-  const path='products/'+Date.now()+'_'+Math.random().toString(36).slice(2,9)+'.'+ext;
+  const token=await currentAccessToken();
+  if(!supabaseOwnerSession?.user?.id) throw new Error('Please sign in with the Supabase owner email before uploading images.');
+  const path=supabaseOwnerSession.user.id+'/products/'+Date.now()+'_'+Math.random().toString(36).slice(2,9)+'.'+ext;
   const encodedPath=path.split('/').map(encodeURIComponent).join('/');
-  const res=await fetch(SUPABASE_URL+'/storage/v1/object/product-images/'+encodedPath,{method:'POST',headers:{apikey:SUPABASE_PUBLISHABLE_KEY,Authorization:'Bearer '+SUPABASE_PUBLISHABLE_KEY,'x-upsert':'false','Content-Type':file.type||'image/jpeg'},body:file});
+  const res=await fetch(SUPABASE_URL+'/storage/v1/object/product-images/'+encodedPath,{method:'POST',headers:{apikey:SUPABASE_PUBLISHABLE_KEY,Authorization:'Bearer '+token,'x-upsert':'false','Content-Type':file.type||'image/jpeg'},body:file});
   if(!res.ok){const t=await res.text();throw new Error('Product image upload failed: '+t);}
   return SUPABASE_URL+'/storage/v1/object/public/product-images/'+encodedPath;
 }
@@ -950,10 +964,12 @@ async function upsertCloudProduct(p){
 async function uploadDesignImage(file,folder){
   const bucket = folder === 'categories' ? 'category-images' : folder === 'collections' ? 'collection-images' : folder === 'logo' ? 'site-assets' : 'hero-images';
   const ext=(file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
-  const path=folder+'/'+Date.now()+'_'+Math.random().toString(36).slice(2,9)+'.'+ext;
+  const token=await currentAccessToken();
+  if(!supabaseOwnerSession?.user?.id) throw new Error('Please sign in with the Supabase owner email before uploading images.');
+  const path=supabaseOwnerSession.user.id+'/'+folder+'/'+Date.now()+'_'+Math.random().toString(36).slice(2,9)+'.'+ext;
   const encodedPath=path.split('/').map(encodeURIComponent).join('/');
   const res=await fetch(SUPABASE_URL+'/storage/v1/object/'+bucket+'/'+encodedPath,{
-    method:'POST',headers:{apikey:SUPABASE_PUBLISHABLE_KEY,Authorization:'Bearer '+SUPABASE_PUBLISHABLE_KEY,'x-upsert':'false','Content-Type':file.type||'image/jpeg'},body:file
+    method:'POST',headers:{apikey:SUPABASE_PUBLISHABLE_KEY,Authorization:'Bearer '+token,'x-upsert':'false','Content-Type':file.type||'image/jpeg'},body:file
   });
   if(!res.ok){const t=await res.text();throw new Error('Design image upload failed: '+t);}
   return SUPABASE_URL+'/storage/v1/object/public/'+bucket+'/'+encodedPath;
@@ -1403,12 +1419,27 @@ async function importBackup(e){
 
 function openAdminLogin(){$("loginError").textContent="";$("loginUser").value="";$("loginPass").value="";$("loginScreen").classList.add("open");setTimeout(()=>$("loginUser").focus(),50)}
 function closeAdminLogin(){$("loginScreen").classList.remove("open")}
-$("loginForm").addEventListener("submit",e=>{
-  e.preventDefault();const u=$("loginUser").value,p=$("loginPass").value;
-  if(u===data.settings.ownerUsername&&p===data.settings.ownerPassword){closeAdminLogin();enterAdmin("owner");return;}
-  const mod=data.moderators.find(m=>m.enabled&&m.username===u&&m.password===p);
-  if(mod){closeAdminLogin();enterAdmin(mod.id);return;}
-  $("loginError").textContent="Invalid username or password.";
+$("loginForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const email=$("loginUser").value.trim(), password=$("loginPass").value;
+  const errorEl=$("loginError"); errorEl.textContent="Checking Supabase login…";
+  const submit=e.submitter; if(submit)submit.disabled=true;
+  try{
+    if(!supabaseClient) throw new Error("Supabase connection is not configured in this file.");
+    const {data:authData,error}=await supabaseClient.auth.signInWithPassword({email,password});
+    if(error) throw error;
+    if(!authData?.user?.id || authData.user.id.toLowerCase()!==RODELA_OWNER_UID.toLowerCase()){
+      await supabaseClient.auth.signOut();
+      throw new Error("This email is not the configured Rodela Style owner account.");
+    }
+    supabaseOwnerSession=authData.session;
+    closeAdminLogin();
+    enterAdmin("owner");
+    const mode=$("adminDataMode"); if(mode)mode.textContent="Owner authenticated — cloud editing enabled";
+  }catch(err){
+    console.error("Owner login failed",err);
+    errorEl.textContent=err?.message||"Login failed. Check the Supabase email and password.";
+  }finally{if(submit)submit.disabled=false;}
 });
 function enterAdmin(role){
   $("storefront").style.display="none";$("adminApp").classList.add("active");currentPage="dashboard";$("adminApp").dataset.role=role;renderAdminPage();
