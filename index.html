@@ -180,6 +180,8 @@ header.site-header{position:sticky;top:0;z-index:40;background:color-mix(in srgb
 
 /* Rodela Style — soft fixed mobile navigation */
 .cc-mobile-bottom-nav{display:none}
+body.checkout-open #ccMobileBottomNav, body.checkout-open #mobileAdminBtn{display:none!important}
+body.checkout-open{padding-bottom:0!important}
 @media(max-width:800px){
   body{padding-bottom:100px}
   .cc-mobile-bottom-nav{position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:9980;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:center;gap:2px;padding:9px 8px 7px;border:1px solid rgba(107,83,60,.12);border-radius:28px;background:rgba(255,250,242,.94);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 12px 36px rgba(67,45,28,.16)}
@@ -521,6 +523,7 @@ function migrate(raw){
   d.collections = Array.isArray(d.collections)?d.collections:deepClone(DEFAULT_DATA.collections);
   d.collections = d.collections.map((c,i)=>({...c,image:c.image||FALLBACK_IMG,order:Number(c.order)||i+1,visible:c.visible!==false}));
   d.settings = mergeObject(DEFAULT_DATA.settings,d.settings);
+  if(typeof d.settings.logoImage!=="string") d.settings.logoImage="";
   d.settings.sections = Array.isArray(d.settings.sections)?d.settings.sections:deepClone(DEFAULT_DATA.settings.sections);
   d.settings.sections = d.settings.sections.map((x,i)=>({...x,order:Number(x.order)||i+1,visible:x.visible!==false}));
   d.settings.sections.sort((a,b)=>a.order-b.order).forEach((x,i)=>x.order=i+1);
@@ -592,8 +595,11 @@ function applyTheme(){
   Object.entries(data.theme).forEach(([k,v])=>document.documentElement.style.setProperty("--"+k,v));
 }
 function renderStore(){
-  $("brandLogo").innerHTML = `${escapeHtml(data.settings.storeName)}<small>PREMIUM FASHION</small>`;
-  $("footerLogo").innerHTML = `${escapeHtml(data.settings.storeName)}<small>PREMIUM FASHION</small>`;
+  const logoMarkup = data.settings.logoImage
+    ? `<img src="${escapeAttr(data.settings.logoImage)}" alt="${escapeAttr(data.settings.storeName)} logo" style="display:block;max-width:150px;max-height:56px;object-fit:contain">`
+    : `${escapeHtml(data.settings.storeName)}<small>PREMIUM FASHION</small>`;
+  $("brandLogo").innerHTML = logoMarkup;
+  $("footerLogo").innerHTML = logoMarkup;
   $("footerTagline").textContent=data.settings.tagline;
   $("heroEyebrow").textContent=data.settings.storeName.toUpperCase();
   $("heroTitle").innerHTML=data.hero.title;
@@ -775,7 +781,7 @@ function renderCheckoutSummary(){
 function openCheckoutFromCart(){if(!getCheckoutItems().length)return showToast("কার্ট খালি।","bad");closeCart();openCheckout();}
 function openCheckoutSingle(id){const p=data.products.find(x=>x.id===id);if(!p||p.stock<=0)return showToast("পণ্যটি এখন স্টকে নেই।","bad");data.cart=[{id:p.id,qty:1}];if(!persist("buy now"))return showToast("অর্ডার প্রস্তুত করা যায়নি।","bad");renderCart();openCheckout();}
 function buyNow(id){openCheckoutSingle(id)}
-function openCheckout(){initCheckoutAddress();renderCheckoutSummary();$("checkoutModal").classList.add("open")}
+function openCheckout(){initCheckoutAddress();renderCheckoutSummary();document.body.classList.add("checkout-open");$("checkoutModal").classList.add("open")}
 function checkoutWhatsApp(){openCheckoutFromCart()}
 $("checkoutForm").addEventListener("submit",async function(e){
   e.preventDefault();
@@ -824,7 +830,7 @@ function openProductDetail(id){
 function detailQty(delta){const el=$("detailQty");let n=Number(el.textContent)+delta;n=Math.max(1,Math.min(activeDetailProduct.stock||1,n));el.textContent=n}
 function addDetailToCart(){const n=Number($("detailQty").textContent);addToCart(activeDetailProduct.id,n);closeModal("detailModal");openCart();}
 function selectDetailImage(btn,src){$("detailMainImg").src=src;document.querySelectorAll(".thumb").forEach(x=>x.classList.remove("active"));btn.classList.add("active");}
-function closeModal(id){$(id).classList.remove("open")}
+function closeModal(id){$(id).classList.remove("open");if(id==="checkoutModal")document.body.classList.remove("checkout-open")}
 
 function showToast(msg,bad=false){
   const t=document.createElement("div");t.className="toast"+(bad?" bad":"");t.textContent=msg;$("toastWrap").appendChild(t);setTimeout(()=>t.remove(),2800);
@@ -900,25 +906,38 @@ function normalizeCloudProduct(row, localFallback={}){
   return {
     id:String(row.id),
     name:row.name || localFallback.name || 'Untitled Product',
-    category:row.category || localFallback.category || 'Shirts',
-    collection:row.collection || localFallback.collection || '',
+    category:localFallback.category || row.category_name || 'Shirts',
+    collection:localFallback.collection || row.collection_name || '',
     price:Number(row.price ?? localFallback.price ?? 0),
     oldPrice:Number(localFallback.oldPrice||0),
     stock:Math.max(0,Number(row.stock ?? localFallback.stock ?? 0)),
     description:row.description ?? localFallback.description ?? '',
-    image:row.image || localFallback.image || FALLBACK_IMG,
-    images:Array.isArray(localFallback.images)?localFallback.images:[],
+    image:row.image_url || localFallback.image || FALLBACK_IMG,
+    images:Array.isArray(row.images)?row.images:(Array.isArray(localFallback.images)?localFallback.images:[]),
     featured:!!localFallback.featured,isNew:!!localFallback.isNew,sale:!!localFallback.sale,
-    visible:localFallback.visible !== false,
-    createdAt:localFallback.createdAt || Date.now()
+    visible:row.is_active ?? localFallback.visible ?? true,
+    createdAt:localFallback.createdAt || Date.now(),
+    categoryId:row.category_id || null, collectionId:row.collection_id || null,
+    sizes:Array.isArray(row.sizes)?row.sizes:(localFallback.sizes||[]),
+    colors:Array.isArray(row.colors)?row.colors:(localFallback.colors||[])
   };
 }
 
 function cloudPayload(p){
+  // Match the actual Supabase products schema (UUID ids, category_id,
+  // collection_id, image_url, images, sizes, colors, is_active).
   return {
-    name:p.name, category:p.category, collection:p.collection || '',
-    price:Number(p.price||0), stock:Math.max(0,Number(p.stock||0)),
-    description:p.description || '', image:p.image || ''
+    name:String(p.name||'Untitled Product'),
+    description:String(p.description||''),
+    price:Number(p.price||0),
+    category_id:p.categoryId || null,
+    collection_id:p.collectionId || null,
+    image_url:String(p.image||''),
+    images:Array.isArray(p.images)?p.images:[],
+    sizes:Array.isArray(p.sizes)?p.sizes:[],
+    colors:Array.isArray(p.colors)?p.colors:[],
+    stock:Math.max(0,Number(p.stock||0)),
+    is_active:p.visible!==false
   };
 }
 
@@ -933,9 +952,10 @@ async function uploadCloudImage(file){
 }
 
 async function upsertCloudProduct(p){
-  const numericId=Number(p.id);
-  if(Number.isInteger(numericId) && numericId>0){
-    const rows=await cloudFetch('/rest/v1/products?id=eq.'+encodeURIComponent(numericId),{
+  const productId=String(p.id||'');
+  const isUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(productId);
+  if(isUuid){
+    const rows=await cloudFetch('/rest/v1/products?id=eq.'+encodeURIComponent(productId),{
       method:'PATCH', headers:{Prefer:'return=representation'}, body:JSON.stringify(cloudPayload(p))
     });
     if(!Array.isArray(rows)||!rows[0]) throw new Error('Product update returned no row');
@@ -949,7 +969,7 @@ async function upsertCloudProduct(p){
 }
 
 async function uploadDesignImage(file,folder){
-  const bucket = folder === 'categories' ? 'category-images' : folder === 'collections' ? 'collection-images' : 'hiro-images';
+  const bucket = folder === 'categories' ? 'category-images' : folder === 'collections' ? 'collection-images' : 'hero-images';
   const ext=(file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
   const path=folder+'/'+Date.now()+'_'+Math.random().toString(36).slice(2,9)+'.'+ext;
   const res=await fetch(SUPABASE_URL+'/storage/v1/object/'+bucket+'/'+encodeURIComponent(path),{
@@ -1356,7 +1376,7 @@ function deleteModerator(id){if(!confirm("Delete this moderator?"))return;data.m
 function renderSettings(){
   const s=data.settings;
   $("adminContent").innerHTML=`<div class="admin-panel"><div class="panel-head"><h3>Store Settings</h3></div><form id="settingsForm"><div class="form-grid">
-  <div class="field"><label>Store Name</label><input id="sName" value="${escapeAttr(s.storeName)}"></div><div class="field"><label>Tagline</label><input id="sTagline" value="${escapeAttr(s.tagline)}"></div>
+  <div class="field"><label>Store Name</label><input id="sName" value="${escapeAttr(s.storeName)}"></div><div class="field"><label>Tagline</label><input id="sTagline" value="${escapeAttr(s.tagline)}"></div><div class="field full"><label>Logo Image</label><input id="sLogoImage" type="file" accept="image/png,image/jpeg,image/webp"><div class="muted" style="font-size:11px">Upload a small logo image (PNG with transparent background works best).</div>${s.logoImage?`<img src="${escapeAttr(s.logoImage)}" alt="Current logo" style="max-width:150px;max-height:70px;object-fit:contain;margin-top:8px">`:""}</div>
   <div class="field"><label>WhatsApp Number</label><input id="sWhatsapp" value="${escapeAttr(s.whatsapp)}" placeholder="Example: 9647..."></div><div class="field"><label>Currency</label><input id="sCurrency" value="${escapeAttr(s.currency)}" maxlength="8"></div>
   <div class="field"><label>Facebook URL</label><input id="sFacebook" type="url" value="${escapeAttr(s.facebook)}"></div><div class="field"><label>Instagram URL</label><input id="sInstagram" type="url" value="${escapeAttr(s.instagram)}"></div>
   <div class="field"><label>TikTok URL</label><input id="sTikTok" type="url" value="${escapeAttr(s.tiktok)}"></div><div class="field"><label>Owner Username</label><input id="sOwnerUser" value="${escapeAttr(s.ownerUsername)}" autocomplete="off"></div>
