@@ -192,6 +192,10 @@ header.site-header{position:sticky;top:0;z-index:40;background:color-mix(in srgb
   #mobileAdminBtn{bottom:calc(88px + env(safe-area-inset-bottom,0px))!important}
 }
 @media(min-width:801px){.cc-mobile-bottom-nav{display:none!important}}
+/* Hide all fixed bottom controls while checkout is open (mobile). */
+body.checkout-open{padding-bottom:0!important}
+body.checkout-open #ccMobileBottomNav,
+body.checkout-open #mobileAdminBtn{display:none!important;visibility:hidden!important;pointer-events:none!important}
 
 </style>
 </head>
@@ -777,7 +781,7 @@ function renderCheckoutSummary(){
 function openCheckoutFromCart(){if(!getCheckoutItems().length)return showToast("কার্ট খালি।","bad");closeCart();openCheckout();}
 function openCheckoutSingle(id){const p=data.products.find(x=>x.id===id);if(!p||p.stock<=0)return showToast("পণ্যটি এখন স্টকে নেই।","bad");data.cart=[{id:p.id,qty:1}];if(!persist("buy now"))return showToast("অর্ডার প্রস্তুত করা যায়নি।","bad");renderCart();openCheckout();}
 function buyNow(id){openCheckoutSingle(id)}
-function openCheckout(){initCheckoutAddress();renderCheckoutSummary();$("checkoutModal").classList.add("open")}
+function openCheckout(){initCheckoutAddress();renderCheckoutSummary();document.body.classList.add("checkout-open");$("checkoutModal").classList.add("open")}
 function checkoutWhatsApp(){openCheckoutFromCart()}
 $("checkoutForm").addEventListener("submit",async function(e){
   e.preventDefault();
@@ -826,7 +830,7 @@ function openProductDetail(id){
 function detailQty(delta){const el=$("detailQty");let n=Number(el.textContent)+delta;n=Math.max(1,Math.min(activeDetailProduct.stock||1,n));el.textContent=n}
 function addDetailToCart(){const n=Number($("detailQty").textContent);addToCart(activeDetailProduct.id,n);closeModal("detailModal");openCart();}
 function selectDetailImage(btn,src){$("detailMainImg").src=src;document.querySelectorAll(".thumb").forEach(x=>x.classList.remove("active"));btn.classList.add("active");}
-function closeModal(id){$(id).classList.remove("open")}
+function closeModal(id){$(id).classList.remove("open");if(id==="checkoutModal")document.body.classList.remove("checkout-open")}
 
 function showToast(msg,bad=false){
   const t=document.createElement("div");t.className="toast"+(bad?" bad":"");t.textContent=msg;$("toastWrap").appendChild(t);setTimeout(()=>t.remove(),2800);
@@ -1419,7 +1423,7 @@ function can(permission){
 
 document.addEventListener("keydown",e=>{
   if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="a"){e.preventDefault();if($("adminApp").classList.contains("active"))return;openAdminLogin();}
-  if(e.key==="Escape"){document.querySelectorAll(".modal-backdrop.open").forEach(x=>x.classList.remove("open"));closeCart();closeAdminLogin();}
+  if(e.key==="Escape"){document.querySelectorAll(".modal-backdrop.open").forEach(x=>x.classList.remove("open"));document.body.classList.remove("checkout-open");closeCart();closeAdminLogin();}
 });
 
 document.querySelectorAll(".side-link[data-page]").forEach(b=>b.addEventListener("click",()=>{
@@ -1440,7 +1444,7 @@ $("searchNavBtn").addEventListener("click",()=>{scrollToShop();setTimeout(()=>$(
 ["searchInput","filterCategory","filterCollection","filterStock","filterTag","sortProducts"].forEach(id=>$(id).addEventListener("input",renderProducts));
 $("searchBtn").addEventListener("click",renderProducts);
 
-document.querySelectorAll(".modal-backdrop").forEach(b=>b.addEventListener("click",e=>{if(e.target===b)b.classList.remove("open")}));
+document.querySelectorAll(".modal-backdrop").forEach(b=>b.addEventListener("click",e=>{if(e.target===b){b.classList.remove("open");if(b.id==="checkoutModal")document.body.classList.remove("checkout-open")}}));
 
 function enforceModeratorView(){
   if(!$("adminApp").classList.contains("active"))return;
