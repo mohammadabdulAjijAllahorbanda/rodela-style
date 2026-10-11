@@ -297,6 +297,7 @@ header.site-header{position:sticky;top:0;z-index:40;background:color-mix(in srgb
     <button class="side-link" data-page="hero">▤ <span>Hero Banner</span></button>
     <button class="side-link" data-page="colors">◐ <span>Colors</span></button>
     <button class="side-link" data-page="moderators">♙ <span>Moderators</span></button>
+    <button class="side-link" data-page="branding">▣ <span>Logo &amp; Branding</span></button>
     <button class="side-link" data-page="settings">⚙ <span>Settings</span></button>
     <button class="side-link" data-page="backup">⇅ <span>Backup</span></button>
     <div class="side-sep"></div>
@@ -912,11 +913,15 @@ function normalizeCloudProduct(row, localFallback={}){
     visible:row.is_active!==false && localFallback.visible!==false, createdAt:localFallback.createdAt||row.created_at||Date.now()
   };
 }
+function isSupabaseUuid(value){
+  return typeof value==='string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
 function cloudPayload(p){
-  const cat=(data.categories||[]).find(c=>String(c.id)===String(p.category_id)||c.name===p.category);
-  const col=(data.collections||[]).find(c=>String(c.id)===String(p.collection_id)||c.name===p.collection);
-  const payload={name:p.name,description:p.description||'',price:Number(p.price||0),category_id:cat?.id||null,collection_id:col?.id||null,image_url:p.image||null,images:Array.isArray(p.images)?p.images:[],sizes:Array.isArray(p.sizes)?p.sizes:[],colors:Array.isArray(p.colors)?p.colors:[],stock:Math.max(0,Number(p.stock||0)),is_active:p.visible!==false};
-  return payload;
+  const cat=(data.categories||[]).find(c=>c.name===p.category || (isSupabaseUuid(String(p.category_id||'')) && String(c.id)===String(p.category_id)));
+  const col=(data.collections||[]).find(c=>c.name===p.collection || (isSupabaseUuid(String(p.collection_id||'')) && String(c.id)===String(p.collection_id)));
+  const catId=cat && isSupabaseUuid(String(cat.id||'')) ? String(cat.id) : (isSupabaseUuid(String(p.category_id||'')) ? String(p.category_id) : null);
+  const colId=col && isSupabaseUuid(String(col.id||'')) ? String(col.id) : (isSupabaseUuid(String(p.collection_id||'')) ? String(p.collection_id) : null);
+  return {name:p.name,description:p.description||'',price:Number(p.price||0),category_id:catId,collection_id:colId,image_url:p.image||null,images:Array.isArray(p.images)?p.images:[],sizes:Array.isArray(p.sizes)?p.sizes:[],colors:Array.isArray(p.colors)?p.colors:[],stock:Math.max(0,Number(p.stock||0)),is_active:p.visible!==false};
 }
 async function uploadCloudImage(file){
   if(!file || !file.type || !file.type.startsWith('image/')) throw new Error('Choose a valid image file.');
@@ -1142,10 +1147,10 @@ function renderAdminPreview(){
 }
 
 function renderAdminPage(){
-  const titleMap={dashboard:"Dashboard",products:"Products",categories:"Categories",collections:"Collections",sections:"Sections",orders:"Orders / WhatsApp Info",hero:"Hero Banner",colors:"Color Studio",moderators:"Moderators",settings:"Settings",backup:"Backup"};
+  const titleMap={dashboard:"Dashboard",products:"Products",categories:"Categories",collections:"Collections",sections:"Sections",orders:"Orders / WhatsApp Info",hero:"Hero Banner",colors:"Color Studio",moderators:"Moderators",branding:"Logo & Branding",settings:"Settings",backup:"Backup"};
   $("adminPageTitle").textContent=titleMap[currentPage]||"Dashboard";
   document.querySelectorAll(".side-link[data-page]").forEach(b=>b.classList.toggle("active",b.dataset.page===currentPage));
-  const fn={dashboard:renderDashboard,products:renderAdminProducts,categories:renderAdminCategories,collections:renderAdminCollections,sections:renderAdminSections,orders:renderOrders,hero:renderAdminHero,colors:renderColors,moderators:renderModerators,settings:renderSettings,backup:renderBackup}[currentPage];
+  const fn={dashboard:renderDashboard,products:renderAdminProducts,categories:renderAdminCategories,collections:renderAdminCollections,sections:renderAdminSections,orders:renderOrders,hero:renderAdminHero,colors:renderColors,moderators:renderModerators,branding:renderSettings,settings:renderSettings,backup:renderBackup}[currentPage];
   if(fn)fn();
   renderAdminPreview();
 }
@@ -1346,9 +1351,9 @@ function deleteModerator(id){if(!confirm("Delete this moderator?"))return;data.m
 
 function renderSettings(){
   const s=data.settings;
-  $("adminContent").innerHTML=`<div class="admin-panel"><div class="panel-head"><h3>Store Settings</h3></div><form id="settingsForm"><div class="form-grid">
+  $("adminContent").innerHTML=`<div class="admin-panel"><div class="panel-head"><h3>Logo &amp; Store Settings</h3></div><form id="settingsForm"><div class="form-grid">
   <div class="field"><label>Store Name</label><input id="sName" value="${escapeAttr(s.storeName)}"></div><div class="field"><label>Tagline</label><input id="sTagline" value="${escapeAttr(s.tagline)}"></div>
-  <div class="field full"><label>Logo Image</label><input id="sLogoImage" type="file" accept="image/png,image/jpeg,image/webp"><div class="muted" style="font-size:11px">Upload your store logo (transparent PNG recommended).</div>${s.logoImage?`<img src="${escapeAttr(s.logoImage)}" alt="Current logo" style="max-width:180px;max-height:80px;object-fit:contain;margin-top:8px">`:""}</div>
+  <div class="field full" style="border:2px solid var(--accent);border-radius:12px;padding:14px;background:var(--surface2)"><label style="font-size:15px">LOGO IMAGE — Upload your store logo here</label><input id="sLogoImage" type="file" accept="image/png,image/jpeg,image/webp"><div class="muted" style="font-size:11px">Upload your store logo (transparent PNG recommended).</div>${s.logoImage?`<img src="${escapeAttr(s.logoImage)}" alt="Current logo" style="max-width:180px;max-height:80px;object-fit:contain;margin-top:8px">`:""}</div>
   <div class="field"><label>WhatsApp Number</label><input id="sWhatsapp" value="${escapeAttr(s.whatsapp)}" placeholder="Example: 9647..."></div><div class="field"><label>Currency</label><input id="sCurrency" value="${escapeAttr(s.currency)}" maxlength="8"></div>
   <div class="field"><label>Facebook URL</label><input id="sFacebook" type="url" value="${escapeAttr(s.facebook)}"></div><div class="field"><label>Instagram URL</label><input id="sInstagram" type="url" value="${escapeAttr(s.instagram)}"></div>
   <div class="field"><label>TikTok URL</label><input id="sTikTok" type="url" value="${escapeAttr(s.tiktok)}"></div><div class="field"><label>Owner Username</label><input id="sOwnerUser" value="${escapeAttr(s.ownerUsername)}" autocomplete="off"></div>
@@ -1418,7 +1423,7 @@ document.addEventListener("keydown",e=>{
 });
 
 document.querySelectorAll(".side-link[data-page]").forEach(b=>b.addEventListener("click",()=>{
-  const permissionMap={products:"products",categories:"categories",collections:"collections",sections:"sections",hero:"hero",settings:"settings"};
+  const permissionMap={products:"products",categories:"categories",collections:"collections",sections:"sections",hero:"hero",branding:"settings",settings:"settings"};
   const p=b.dataset.page;
   if(permissionMap[p]&&!can(permissionMap[p]))return showToast("Your moderator account does not have this permission.","bad");
   if(p==="moderators"&&!isOwner())return showToast("Only the owner can manage moderators.","bad");
