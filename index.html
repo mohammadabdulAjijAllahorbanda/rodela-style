@@ -414,8 +414,8 @@ body.checkout-open #mobileAdminBtn{display:none!important;visibility:hidden!impo
    BACKUP / UI / EVENTS
    ============================================================ */
 
-const STORAGE_KEY = "rodela_style_data";
-const VERSION = 3;
+const STORAGE_KEY = "rodela_style_data_clean_v4";
+const VERSION = 4;
 
 /* ============================================================
    SUPABASE CLOUD PRODUCT SYNC
@@ -455,12 +455,7 @@ const DEFAULT_THEME = {
 
 const DEFAULT_DATA = {
   version: VERSION,
-  products: [
-    {id:"p1",name:"Premium Rodela Shirt",category:"Shirts",collection:"Premium Collection",price:49,oldPrice:65,stock:18,description:"A clean everyday shirt with a soft premium feel and an effortless silhouette.",image:FALLBACK_IMG,images:[],featured:true,isNew:true,sale:true,visible:true,createdAt:Date.now()-3000},
-    {id:"p2",name:"Classic Tailored Pants",category:"Pants",collection:"Best Sellers",price:59,oldPrice:0,stock:12,description:"Relaxed tailored pants designed for polished everyday wear.",image:FALLBACK_IMG,images:[],featured:true,isNew:false,sale:false,visible:true,createdAt:Date.now()-2000},
-    {id:"p3",name:"Minimal Gold Watch",category:"Watches",collection:"Limited Edition",price:79,oldPrice:95,stock:7,description:"A minimal watch with a warm gold finish and timeless proportions.",image:FALLBACK_IMG,images:[],featured:true,isNew:true,sale:true,visible:true,createdAt:Date.now()-1000},
-    {id:"p4",name:"Cloud Essential Tee",category:"T-Shirts / Genji",collection:"New Arrival",price:29,oldPrice:0,stock:24,description:"A versatile premium tee made for easy layering and daily comfort.",image:FALLBACK_IMG,images:[],featured:false,isNew:true,sale:false,visible:true,createdAt:Date.now()}
-  ],
+  products: [],
   categories:[
     {id:"c1",name:"Shirts",visible:true,order:1,image:FALLBACK_IMG},
     {id:"c2",name:"Pants",visible:true,order:2,image:FALLBACK_IMG},
@@ -802,8 +797,7 @@ $("checkoutForm").addEventListener("submit",async function(e){
   const lines=items.map(x=>`পণ্য: ${x.p.name}\nপরিমাণ: ${x.qty}\nদাম: ${money(x.p.price)}\nমোট: ${money(x.p.price*x.qty)}`).join("\n\n");
   const total=items.reduce((s,x)=>s+x.p.price*x.qty,0);
   const message=`🛍️ ${data.settings.storeName} অর্ডার\n\n👤 নাম: ${name}\n📱 মোবাইল: ${phone}\n📍 জেলা: ${district}\n🏢 থানা/উপজেলা: ${upazila}\n🏠 গ্রাম/এলাকা: ${village}\n📝 বিস্তারিত ঠিকানা: ${address||"দেওয়া হয়নি"}\n\n${lines}\n\n📏 সাইজ: ${size||"নির্বাচন করা হয়নি"}\n🎨 রঙ: ${color||"নির্বাচন করা হয়নি"}\n💬 নোট: ${note||"নেই"}\n\n💰 সর্বমোট: ${money(total)}\n\n✅ আমি অর্ডারটি নিশ্চিত করতে চাই।`;
-  const whatsappNumber=String(data.settings.whatsapp||"").replace(/[^\d]/g,"");
-  const url=whatsappNumber ? "https://wa.me/"+whatsappNumber+"?text="+encodeURIComponent(message) : "#";
+  const url=whatsappUrl(message);if(url==="#")return;
   const popup=window.open("about:blank","_blank");
   if(!supabaseReady){if(popup)popup.close();return showToast("অর্ডার সংরক্ষণের জন্য Supabase সংযোগ প্রয়োজন।","bad");}
   try{
@@ -1042,32 +1036,22 @@ async function initSupabaseProducts(){
     const localProducts=Array.isArray(data.products)?data.products.slice():[];
     const merged=[];
     const seenRemote=new Set();
-    const idAliases=new Map();
 
     for(const local of localProducts){
-      // Match by id first, then by exact normalized name to avoid duplicate cloud products
-      // when a local product's old id differs from its Supabase id.
-      const localName=String(local.name||'').trim().toLowerCase();
-      const remote=remoteById.get(String(local.id)) || rows.find(r=>String(r.name||'').trim().toLowerCase()===localName);
+      const remote=remoteById.get(String(local.id));
       if(remote){
         merged.push(normalizeCloudProduct(remote,local));
         seenRemote.add(String(remote.id));
-        if(String(local.id)!==String(remote.id)) idAliases.set(String(local.id),String(remote.id));
       }else if(!/^\d+$/.test(String(local.id))){
         try{
           const saved=await upsertCloudProduct(local);
           merged.push(saved);
           seenRemote.add(String(saved.id));
-          if(String(local.id)!==String(saved.id)) idAliases.set(String(local.id),String(saved.id));
         }catch(err){
           console.error('Cloud product migration failed',local,err);
           merged.push(local);
         }
       }
-    }
-    // Update old cart IDs to the real Supabase product IDs so every migrated product can be ordered.
-    if(idAliases.size && Array.isArray(data.cart)){
-      data.cart=data.cart.map(item=>idAliases.has(String(item.id))?{...item,id:idAliases.get(String(item.id))}:item);
     }
     for(const row of rows){
       if(!seenRemote.has(String(row.id))) merged.push(normalizeCloudProduct(row));
