@@ -802,7 +802,8 @@ $("checkoutForm").addEventListener("submit",async function(e){
   const lines=items.map(x=>`পণ্য: ${x.p.name}\nপরিমাণ: ${x.qty}\nদাম: ${money(x.p.price)}\nমোট: ${money(x.p.price*x.qty)}`).join("\n\n");
   const total=items.reduce((s,x)=>s+x.p.price*x.qty,0);
   const message=`🛍️ ${data.settings.storeName} অর্ডার\n\n👤 নাম: ${name}\n📱 মোবাইল: ${phone}\n📍 জেলা: ${district}\n🏢 থানা/উপজেলা: ${upazila}\n🏠 গ্রাম/এলাকা: ${village}\n📝 বিস্তারিত ঠিকানা: ${address||"দেওয়া হয়নি"}\n\n${lines}\n\n📏 সাইজ: ${size||"নির্বাচন করা হয়নি"}\n🎨 রঙ: ${color||"নির্বাচন করা হয়নি"}\n💬 নোট: ${note||"নেই"}\n\n💰 সর্বমোট: ${money(total)}\n\n✅ আমি অর্ডারটি নিশ্চিত করতে চাই।`;
-  const url=whatsappUrl(message);if(url==="#")return;
+  const whatsappNumber=String(data.settings.whatsapp||"").replace(/[^\d]/g,"");
+  const url=whatsappNumber ? "https://wa.me/"+whatsappNumber+"?text="+encodeURIComponent(message) : "#";
   const popup=window.open("about:blank","_blank");
   if(!supabaseReady){if(popup)popup.close();return showToast("অর্ডার সংরক্ষণের জন্য Supabase সংযোগ প্রয়োজন।","bad");}
   try{
@@ -1041,24 +1042,32 @@ async function initSupabaseProducts(){
     const localProducts=Array.isArray(data.products)?data.products.slice():[];
     const merged=[];
     const seenRemote=new Set();
+    const idAliases=new Map();
 
     for(const local of localProducts){
-      const remote=remoteById.get(St
-const remote=remoteById.get(String(local.id)) || rows.find(r => String(r.name||'').trim().toLowerCase() === String(local.name||'').trim().toLowerCase());
-ring(local.id));
+      // Match by id first, then by exact normalized name to avoid duplicate cloud products
+      // when a local product's old id differs from its Supabase id.
+      const localName=String(local.name||'').trim().toLowerCase();
+      const remote=remoteById.get(String(local.id)) || rows.find(r=>String(r.name||'').trim().toLowerCase()===localName);
       if(remote){
         merged.push(normalizeCloudProduct(remote,local));
         seenRemote.add(String(remote.id));
+        if(String(local.id)!==String(remote.id)) idAliases.set(String(local.id),String(remote.id));
       }else if(!/^\d+$/.test(String(local.id))){
         try{
           const saved=await upsertCloudProduct(local);
           merged.push(saved);
           seenRemote.add(String(saved.id));
+          if(String(local.id)!==String(saved.id)) idAliases.set(String(local.id),String(saved.id));
         }catch(err){
           console.error('Cloud product migration failed',local,err);
           merged.push(local);
         }
       }
+    }
+    // Update old cart IDs to the real Supabase product IDs so every migrated product can be ordered.
+    if(idAliases.size && Array.isArray(data.cart)){
+      data.cart=data.cart.map(item=>idAliases.has(String(item.id))?{...item,id:idAliases.get(String(item.id))}:item);
     }
     for(const row of rows){
       if(!seenRemote.has(String(row.id))) merged.push(normalizeCloudProduct(row));
