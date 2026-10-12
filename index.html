@@ -1043,7 +1043,9 @@ async function initSupabaseProducts(){
     const seenRemote=new Set();
 
     for(const local of localProducts){
-      const remote=remoteById.get(String(local.id));
+      const remote=remoteById.get(St
+const remote=remoteById.get(String(local.id)) || rows.find(r => String(r.name||'').trim().toLowerCase() === String(local.name||'').trim().toLowerCase());
+ring(local.id));
       if(remote){
         merged.push(normalizeCloudProduct(remote,local));
         seenRemote.add(String(remote.id));
