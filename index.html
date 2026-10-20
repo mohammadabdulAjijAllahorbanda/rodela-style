@@ -1667,7 +1667,6 @@ init();
       stock: Math.max(0, Number(row.stock ?? localFallback.stock ?? 0)),
       description: row.description ?? localFallback.description ?? '',
       image: img,
-      image_url: (typeof row.image_url === 'string' && /^https?:\/\//i.test(row.image_url)) ? row.image_url : (typeof row.image === 'string' && /^https?:\/\//i.test(row.image) ? row.image : (row.image && typeof row.image === 'object' && /^https?:\/\//i.test(String(row.image.url || row.image.image_url || '')) ? (row.image.url || row.image.image_url) : (typeof localFallback.image_url === 'string' && /^https?:\/\//i.test(localFallback.image_url) ? localFallback.image_url : ''))),
       images: gallery,
       featured: localFallback.featured !== undefined ? !!localFallback.featured : !!row.featured,
       isNew: localFallback.isNew !== undefined ? !!localFallback.isNew : !!(row.isNew ?? row.is_new),
@@ -1763,20 +1762,7 @@ init();
     await cloudFetch('/rest/v1/products?id=eq.' + encodeURIComponent(String(id)), { method: 'DELETE' });
   };
 
-  // Resolve a public HTTP(S) product-image URL for WhatsApp. Blob/data/local paths cannot
-  // be opened by the shop owner from another device, so only share a public URL.
-  function orderProductImageUrl(p) {
-    const candidates = [p?.image_url, p?.image, p?.image?.url, p?.image?.image_url,
-      ...(Array.isArray(p?.images) ? p.images.flatMap(v => [v, v?.url, v?.image_url]) : [])];
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string') {
-        const value = candidate.trim();
-        if (/^https?:\/\//i.test(value)) return value;
-      }
-    }
-    return '';
-  }
-
+  // The WhatsApp message now contains a usable public product-image URL and the saved order ID.
   // Stop the old submit handler from running twice, while retaining its existing checkout UI.
   const checkoutForm = document.getElementById('checkoutForm');
   if (checkoutForm) {
@@ -1825,8 +1811,8 @@ init();
           product_code: productCode(x.p),
           price: Number(x.p.price || 0),
           quantity: Number(x.qty || 1),
-          image: orderProductImageUrl(x.p) || productImage(x.p),
-          image_url: orderProductImageUrl(x.p)
+          image: productImage(x.p),
+          image_url: /^https?:\/\//i.test(String(productImage(x.p))) ? productImage(x.p) : ''
         })),
         p_total: Number(total || 0)
       };
@@ -1852,8 +1838,8 @@ init();
 
         const orderId = String(result.order_id);
         const itemLines = items.map(x => {
-          const image = orderProductImageUrl(x.p);
-          const imageLine = image ? `🖼️ ছবির লিংক: ${image}` : '🖼️ ছবির লিংক: পাওয়া যায়নি — Admin-এ পণ্যের Public Image URL দিতে হবে';
+          const image = String(productImage(x.p) || '');
+          const imageLine = /^https?:\/\//i.test(image) ? `🖼️ ছবির লিংক: ${image}` : '🖼️ ছবির লিংক: অনলাইনে পাওয়া যায়নি';
           return `পণ্য: ${x.p.name}\nকোড: ${productCode(x.p)}\nপরিমাণ: ${x.qty}\nএকক দাম: ${money(x.p.price)}\nলাইন মোট: ${money(x.p.price * x.qty)}\n${imageLine}`;
         }).join('\n\n');
         const message = `🛍️ ${data.settings.storeName} — নতুন অর্ডার\n🧾 অর্ডার ID: ${orderId}\n\n👤 নাম: ${name}\n📱 মোবাইল: ${phone}\n📍 জেলা: ${district}\n🏢 থানা/উপজেলা: ${upazila}\n🏠 গ্রাম/এলাকা: ${village}\n📝 বিস্তারিত ঠিকানা: ${address || 'দেওয়া হয়নি'}\n\n${itemLines}\n\n📏 সাইজ: ${size || 'নির্বাচন করা হয়নি'}\n🎨 রঙ: ${color || 'নির্বাচন করা হয়নি'}\n💬 নোট: ${note || 'নেই'}\n\n💰 অর্ডারের মোট: ${money(total)}\n\n✅ WhatsApp-এ অর্ডার নিশ্চিত করতে চাই।`;
