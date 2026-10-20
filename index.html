@@ -414,8 +414,8 @@ body.checkout-open #mobileAdminBtn{display:none!important;visibility:hidden!impo
    BACKUP / UI / EVENTS
    ============================================================ */
 
-const STORAGE_KEY = "rodela_style_data_clean_v4";
-const VERSION = 4;
+const STORAGE_KEY = "rodela_style_data";
+const VERSION = 3;
 
 /* ============================================================
    SUPABASE CLOUD PRODUCT SYNC
@@ -455,7 +455,12 @@ const DEFAULT_THEME = {
 
 const DEFAULT_DATA = {
   version: VERSION,
-  products: [],
+  products: [
+    {id:"p1",name:"Premium Rodela Shirt",category:"Shirts",collection:"Premium Collection",price:49,oldPrice:65,stock:18,description:"A clean everyday shirt with a soft premium feel and an effortless silhouette.",image:FALLBACK_IMG,images:[],featured:true,isNew:true,sale:true,visible:true,createdAt:Date.now()-3000},
+    {id:"p2",name:"Classic Tailored Pants",category:"Pants",collection:"Best Sellers",price:59,oldPrice:0,stock:12,description:"Relaxed tailored pants designed for polished everyday wear.",image:FALLBACK_IMG,images:[],featured:true,isNew:false,sale:false,visible:true,createdAt:Date.now()-2000},
+    {id:"p3",name:"Minimal Gold Watch",category:"Watches",collection:"Limited Edition",price:79,oldPrice:95,stock:7,description:"A minimal watch with a warm gold finish and timeless proportions.",image:FALLBACK_IMG,images:[],featured:true,isNew:true,sale:true,visible:true,createdAt:Date.now()-1000},
+    {id:"p4",name:"Cloud Essential Tee",category:"T-Shirts / Genji",collection:"New Arrival",price:29,oldPrice:0,stock:24,description:"A versatile premium tee made for easy layering and daily comfort.",image:FALLBACK_IMG,images:[],featured:false,isNew:true,sale:false,visible:true,createdAt:Date.now()}
+  ],
   categories:[
     {id:"c1",name:"Shirts",visible:true,order:1,image:FALLBACK_IMG},
     {id:"c2",name:"Pants",visible:true,order:2,image:FALLBACK_IMG},
@@ -1534,5 +1539,812 @@ init();
 <button id="mobileAdminBtn" type="button" aria-label="Admin Login">Admin</button>
 <style>#mobileAdminBtn{position:fixed;right:12px;bottom:12px;z-index:9990;border:1px solid rgba(0,0,0,.15);background:rgba(255,255,255,.92);color:#555;border-radius:999px;padding:7px 11px;font:600 11px/1 sans-serif;opacity:.35;box-shadow:0 3px 12px rgba(0,0,0,.08)}#mobileAdminBtn:active{opacity:.8}@media(min-width:768px){#mobileAdminBtn{display:none}}</style>
 <script>document.getElementById("mobileAdminBtn")?.addEventListener("click",openAdminLogin);</script>
+
+
+<!-- Rodela Style cloud sync, order image link, and sales reporting fixes -->
+<script>
+/*
+ RODELA STYLE FIX LAYER
+ Paste this script immediately before </body> in the existing Rodela Style HTML.
+ It preserves the existing UI and overrides only cloud/schema compatibility,
+ order messaging, product syncing and dashboard statistics.
+*/
+(function () {
+  'use strict';
+
+  // Fix success toasts: the old code passed "good" / "bad" strings to a boolean parameter,
+  // which made successful saves appear as errors.
+  showToast = function (msg, status = false) {
+    const bad = status === true || status === 'bad';
+    const t = document.createElement('div');
+    t.className = 'toast' + (bad ? ' bad' : '');
+    t.textContent = String(msg ?? '');
+    const wrap = document.getElementById('toastWrap');
+    if (wrap) {
+      wrap.appendChild(t);
+      setTimeout(() => t.remove(), 3200);
+    }
+  };
+
+  // Read the actual column names from site_settings. The project has appeared with both
+  // `theme` and `themes` schemas, so do not assume either name.
+  fetchSiteSettings = async function () {
+    if (!supabaseClient) throw new Error('Supabase client is not configured.');
+    const { data: row, error } = await supabaseClient
+      .from('site_settings')
+      .select('*')
+      .eq('id', 1)
+      .maybeSingle();
+    if (error) throw error;
+    if (!row) return null;
+    // Normalise both schema versions for the existing loader without deleting original keys.
+    if (row.theme == null && row.themes != null) row.theme = row.themes;
+    return row;
+  };
+
+  saveSiteSettings = async function (reason = 'site settings save') {
+    if (!supabaseClient || !supabaseReady) {
+      console.warn('Site settings not saved to cloud: Supabase is not ready.', reason);
+      return false;
+    }
+    try {
+      normalizeDesignState();
+      const cloudSettings = deepClone(data.settings || {});
+      cloudSettings.design = {
+        categories: deepClone(data.categories || []),
+        collections: deepClone(data.collections || []),
+        sections: deepClone(data.settings?.sections || [])
+      };
+      const base = {
+        id: 1,
+        hero: deepClone(data.hero || {}),
+        settings: cloudSettings,
+        updated_at: new Date().toISOString()
+      };
+
+      // Find the live column name first. This also avoids overwriting the other theme column.
+      const { data: existingRow, error: readError } = await supabaseClient
+        .from('site_settings').select('*').eq('id', 1).maybeSingle();
+      if (readError) throw readError;
+      let themeColumn = 'themes';
+      if (existingRow && Object.prototype.hasOwnProperty.call(existingRow, 'themes')) themeColumn = 'themes';
+      else if (existingRow && Object.prototype.hasOwnProperty.call(existingRow, 'theme')) themeColumn = 'theme';
+
+      const payload = { ...base, [themeColumn]: deepClone(data.theme || DEFAULT_THEME) };
+      let result = await supabaseClient.from('site_settings').upsert(payload, { onConflict: 'id' });
+
+      // If there is no row to inspect yet, try the other known column name only when the
+      // first attempt specifically failed because that column does not exist.
+      if (result.error && !existingRow) {
+        const msg = String(result.error.message || result.error.details || '').toLowerCase();
+        const mentionsThemeColumn = msg.includes(themeColumn.toLowerCase()) &&
+          (msg.includes('column') || msg.includes('schema cache') || msg.includes('does not exist'));
+        if (mentionsThemeColumn) {
+          const alternate = themeColumn === 'themes' ? 'theme' : 'themes';
+          const retryPayload = { ...base, [alternate]: deepClone(data.theme || DEFAULT_THEME) };
+          result = await supabaseClient.from('site_settings').upsert(retryPayload, { onConflict: 'id' });
+        }
+      }
+      if (result.error) throw result.error;
+      return true;
+    } catch (err) {
+      console.error('Site settings cloud save failed:', reason, err);
+      return false;
+    }
+  };
+
+  // Support the project's current/legacy products columns. The app previously expected
+  // `is_active`, `images`, `sizes`, and `colors`, but some Rodela tables use `isActive`,
+  // `image`, `size`, and `color`.
+  normalizeCloudProduct = function (row, localFallback = {}) {
+    const cat = (data.categories || []).find(c =>
+      (row.category_id && String(c.id) === String(row.category_id)) ||
+      (row.category && String(c.name).toLowerCase() === String(row.category).toLowerCase())
+    );
+    const col = (data.collections || []).find(c =>
+      (row.collection_id && String(c.id) === String(row.collection_id)) ||
+      (row.collection && String(c.name).toLowerCase() === String(row.collection).toLowerCase())
+    );
+    let img = row.image_url || localFallback.image || FALLBACK_IMG;
+    if ((!row.image_url || !String(row.image_url)) && row.image) {
+      if (typeof row.image === 'string') img = row.image;
+      else if (typeof row.image === 'object') img = row.image.url || row.image.image_url || img;
+    }
+    const gallery = Array.isArray(row.images) ? row.images :
+      (Array.isArray(row.image) ? row.image :
+      (Array.isArray(row.image?.gallery) ? row.image.gallery :
+      (Array.isArray(localFallback.images) ? localFallback.images : [])));
+    const activeValue = row.is_active !== undefined ? row.is_active : row.isActive;
+    return {
+      id: String(row.id ?? localFallback.id ?? uid('p')),
+      name: row.name || localFallback.name || 'Untitled Product',
+      category: cat?.name || row.category || localFallback.category || 'Shirts',
+      collection: col?.name || row.collection || localFallback.collection || '',
+      category_id: row.category_id || localFallback.category_id || null,
+      collection_id: row.collection_id || localFallback.collection_id || null,
+      price: Number(row.price ?? localFallback.price ?? 0),
+      oldPrice: Number(row.oldPrice ?? localFallback.oldPrice ?? 0),
+      stock: Math.max(0, Number(row.stock ?? localFallback.stock ?? 0)),
+      description: row.description ?? localFallback.description ?? '',
+      image: img,
+      images: gallery,
+      featured: localFallback.featured !== undefined ? !!localFallback.featured : !!row.featured,
+      isNew: localFallback.isNew !== undefined ? !!localFallback.isNew : !!(row.isNew ?? row.is_new),
+      sale: localFallback.sale !== undefined ? !!localFallback.sale : !!row.sale,
+      visible: activeValue !== false && localFallback.visible !== false,
+      createdAt: localFallback.createdAt || row.created_at || Date.now()
+    };
+  };
+
+  function currentProductSchemaPayload(p, keys, includeId) {
+    const common = {
+      name: p.name,
+      description: p.description || '',
+      price: Number(p.price || 0),
+      category_id: (isSupabaseUuid(String(p.category_id || '')) ? p.category_id : null),
+      collection_id: (isSupabaseUuid(String(p.collection_id || '')) ? p.collection_id : null),
+      image_url: (p.image && /^https?:\/\//i.test(String(p.image))) ? p.image : null,
+      stock: Math.max(0, Number(p.stock || 0))
+    };
+    if (keys && keys.has('category')) common.category = p.category || '';
+    if (keys && keys.has('collection')) common.collection = p.collection || '';
+    if (!keys || keys.has('is_active') || !keys.has('isActive')) {
+      const modern = { ...common, is_active: p.visible !== false };
+      if (!keys || keys.has('images')) modern.images = Array.isArray(p.images) ? p.images : [];
+      if (!keys || keys.has('sizes')) modern.sizes = Array.isArray(p.sizes) ? p.sizes : [];
+      if (!keys || keys.has('colors')) modern.colors = Array.isArray(p.colors) ? p.colors : [];
+      if (keys && keys.has('image')) modern.image = { url: p.image || null, gallery: Array.isArray(p.images) ? p.images : [] };
+      if (includeId) modern.id = p.id;
+      return modern;
+    }
+    const legacy = { ...common, isActive: p.visible !== false };
+    if (keys.has('image')) legacy.image = { url: p.image || null, gallery: Array.isArray(p.images) ? p.images : [] };
+    if (keys.has('size')) legacy.size = Array.isArray(p.sizes) ? p.sizes : [];
+    if (keys.has('color')) legacy.color = Array.isArray(p.colors) ? p.colors : [];
+    if (keys.has('images')) legacy.images = Array.isArray(p.images) ? p.images : [];
+    if (keys.has('sizes')) legacy.sizes = Array.isArray(p.sizes) ? p.sizes : [];
+    if (keys.has('colors')) legacy.colors = Array.isArray(p.colors) ? p.colors : [];
+    if (includeId) legacy.id = p.id;
+    return legacy;
+  }
+
+  upsertCloudProduct = async function (p) {
+    if (!supabaseReady) throw new Error('Supabase is not ready. Please sign in and reload the admin.');
+    const isUuid = isSupabaseUuid(String(p.id || ''));
+    let sampleRows = [];
+    try { sampleRows = await cloudFetch('/rest/v1/products?select=*&limit=1'); } catch (_) {}
+    const sample = Array.isArray(sampleRows) ? sampleRows[0] : null;
+    const keys = sample ? new Set(Object.keys(sample)) : null;
+    const attempts = [];
+
+    if (keys) {
+      attempts.push(currentProductSchemaPayload(p, keys, isUuid));
+    } else {
+      // Empty tables cannot advertise their column names; try the current and known legacy layouts.
+      attempts.push(currentProductSchemaPayload(p, null, isUuid));
+      const legacyKeys = new Set(['isActive', 'image', 'size', 'color', 'category_id', 'collection_id']);
+      attempts.push(currentProductSchemaPayload(p, legacyKeys, isUuid));
+      const minimal = {
+        name: p.name, description: p.description || '', price: Number(p.price || 0),
+        category_id: isSupabaseUuid(String(p.category_id || '')) ? p.category_id : null,
+        collection_id: isSupabaseUuid(String(p.collection_id || '')) ? p.collection_id : null,
+        image_url: (p.image && /^https?:\/\//i.test(String(p.image))) ? p.image : null,
+        stock: Math.max(0, Number(p.stock || 0)), isActive: p.visible !== false
+      };
+      if (isUuid) minimal.id = p.id;
+      attempts.push(minimal);
+    }
+
+    let lastError = null;
+    for (const payload of attempts) {
+      try {
+        // Upsert is safer than PATCH-only: it also handles a stale local UUID whose cloud row
+        // no longer exists. RLS errors still surface and are not hidden.
+        const rows = await cloudFetch('/rest/v1/products?on_conflict=id', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+          body: JSON.stringify(payload)
+        });
+        if (!Array.isArray(rows) || !rows[0]) throw new Error('Product save returned no row. Check products INSERT/UPDATE RLS policies and owner login.');
+        return normalizeCloudProduct(rows[0], p);
+      } catch (err) {
+        lastError = err;
+        const msg = String(err?.message || err).toLowerCase();
+        const schemaMismatch = msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find') || msg.includes('pgrst204') || msg.includes('does not exist');
+        if (!schemaMismatch) throw err;
+      }
+    }
+    throw lastError || new Error('Could not save product to Supabase.');
+  };
+
+  deleteCloudProduct = async function (id) {
+    if (!isSupabaseUuid(String(id || ''))) return; // local-only legacy item
+    await cloudFetch('/rest/v1/products?id=eq.' + encodeURIComponent(String(id)), { method: 'DELETE' });
+  };
+
+  // The WhatsApp message now contains a usable public product-image URL and the saved order ID.
+  // Stop the old submit handler from running twice, while retaining its existing checkout UI.
+  const checkoutForm = document.getElementById('checkoutForm');
+  if (checkoutForm) {
+    checkoutForm.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const items = getCheckoutItems();
+      if (!items.length) return showToast('কার্ট খালি।', 'bad');
+      if (!supabaseReady) return showToast('অর্ডার সংরক্ষণের জন্য Supabase সংযোগ প্রয়োজন।', 'bad');
+      const whatsappNumber = String(data.settings.whatsapp || '').replace(/[^\d]/g, '');
+      if (!whatsappNumber) return showToast('Admin → Settings-এ WhatsApp নম্বর যোগ করুন।', 'bad');
+
+      const name = document.getElementById('coName').value.trim();
+      const phone = document.getElementById('coPhone').value.trim();
+      const district = document.getElementById('coDistrict').value;
+      const upazila = document.getElementById('coUpazila').value;
+      const village = document.getElementById('coVillage').value.trim();
+      const address = document.getElementById('coAddress').value.trim();
+      const size = document.getElementById('coSize').value;
+      const color = document.getElementById('coColor').value;
+      const note = document.getElementById('coNote').value.trim();
+      if (!name || !phone || !district || !upazila || !village) {
+        return showToast('নাম, মোবাইল, জেলা, থানা/উপজেলা ও গ্রাম/এলাকা পূরণ করুন।', 'bad');
+      }
+      if (!/^\+?[\d\s()-]{8,20}$/.test(phone)) return showToast('সঠিক মোবাইল নম্বর লিখুন।', 'bad');
+      for (const item of items) {
+        if (!item.p || Number(item.qty) < 1 || Number(item.qty) > Number(item.p.stock)) {
+          return showToast('একটি পণ্যের স্টক পরিবর্তিত হয়েছে। কার্ট আপডেট করে আবার চেষ্টা করুন।', 'bad');
+        }
+      }
+
+      const total = items.reduce((sum, x) => sum + Number(x.p.price || 0) * Number(x.qty || 0), 0);
+      const payload = {
+        p_customer_name: name,
+        p_phone: phone,
+        p_district: district,
+        p_upazila: upazila,
+        p_village: village,
+        p_address: address || '',
+        p_size: size || '',
+        p_color: color || '',
+        p_note: note || '',
+        p_items: items.map(x => ({
+          product_id: String(x.p.id),
+          product_name: x.p.name,
+          product_code: productCode(x.p),
+          price: Number(x.p.price || 0),
+          quantity: Number(x.qty || 1),
+          image: productImage(x.p),
+          image_url: /^https?:\/\//i.test(String(productImage(x.p))) ? productImage(x.p) : ''
+        })),
+        p_total: Number(total || 0)
+      };
+
+      const submitButton = checkoutForm.querySelector('button[type="submit"]');
+      if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'অর্ডার সংরক্ষণ হচ্ছে…'; }
+      const popup = window.open('about:blank', '_blank');
+      try {
+        const saved = await cloudFetch('/rest/v1/rpc/place_order', {
+          method: 'POST', body: JSON.stringify(payload)
+        });
+        const result = Array.isArray(saved) ? saved[0] : saved;
+        if (!result || !result.order_id) throw new Error('অর্ডার সংরক্ষণের ফলাফল পাওয়া যায়নি।');
+
+        // The place_order RPC should decrement server-side stock atomically.
+        items.forEach(x => {
+          const p = data.products.find(prod => String(prod.id) === String(x.p.id));
+          if (p) p.stock = Math.max(0, Number(p.stock || 0) - Number(x.qty || 0));
+        });
+        data.cart = [];
+        persist('order placed');
+        renderAll();
+
+        const orderId = String(result.order_id);
+        const itemLines = items.map(x => {
+          const image = String(productImage(x.p) || '');
+          const imageLine = /^https?:\/\//i.test(image) ? `🖼️ ছবির লিংক: ${image}` : '🖼️ ছবির লিংক: অনলাইনে পাওয়া যায়নি';
+          return `পণ্য: ${x.p.name}\nকোড: ${productCode(x.p)}\nপরিমাণ: ${x.qty}\nএকক দাম: ${money(x.p.price)}\nলাইন মোট: ${money(x.p.price * x.qty)}\n${imageLine}`;
+        }).join('\n\n');
+        const message = `🛍️ ${data.settings.storeName} — নতুন অর্ডার\n🧾 অর্ডার ID: ${orderId}\n\n👤 নাম: ${name}\n📱 মোবাইল: ${phone}\n📍 জেলা: ${district}\n🏢 থানা/উপজেলা: ${upazila}\n🏠 গ্রাম/এলাকা: ${village}\n📝 বিস্তারিত ঠিকানা: ${address || 'দেওয়া হয়নি'}\n\n${itemLines}\n\n📏 সাইজ: ${size || 'নির্বাচন করা হয়নি'}\n🎨 রঙ: ${color || 'নির্বাচন করা হয়নি'}\n💬 নোট: ${note || 'নেই'}\n\n💰 অর্ডারের মোট: ${money(total)}\n\n✅ WhatsApp-এ অর্ডার নিশ্চিত করতে চাই।`;
+        const url = 'https://wa.me/' + whatsappNumber + '?text=' + encodeURIComponent(message);
+        if (popup) popup.location.href = url;
+        else window.location.href = url;
+        showToast('অর্ডার Supabase-এ সংরক্ষিত হয়েছে। WhatsApp খুলছে।');
+        closeModal('checkoutModal');
+      } catch (err) {
+        if (popup) popup.close();
+        console.error('Order save failed:', err);
+        showToast('অর্ডার সংরক্ষণ হয়নি: ' + (err?.message || err), 'bad');
+      } finally {
+        if (submitButton) { submitButton.disabled = false; submitButton.textContent = '🟢 WhatsApp-এ অর্ডার নিশ্চিত করুন'; }
+      }
+    }, true);
+  }
+
+  // Read dashboard RPC first. If it is missing, calculate saved-order metrics from the orders
+  // table instead of silently leaving every number at zero. Cancelled orders are excluded.
+  renderDashboard = async function () {
+    const stock = data.products.reduce((s, p) => s + Number(p.stock || 0), 0);
+    const low = data.products.filter(p => p.stock > 0 && p.stock <= 5).length;
+    const featured = data.products.filter(p => p.featured).length;
+    let sold = 0, orderCount = 0, salesTotal = 0, statsSource = 'Saved orders';
+
+    if (supabaseReady) {
+      let rpcWorked = false;
+      try {
+        const stats = await cloudFetch('/rest/v1/rpc/order_dashboard_stats', { method: 'POST', body: '{}' });
+        const x = Array.isArray(stats) ? stats[0] : stats;
+        if (x && (x.order_count !== undefined || x.sales_total !== undefined || x.sold_units !== undefined)) {
+          sold = Number(x.sold_units || 0);
+          orderCount = Number(x.order_count || 0);
+          salesTotal = Number(x.sales_total || 0);
+          rpcWorked = true;
+          statsSource = 'Dashboard report';
+        }
+      } catch (err) { console.warn('Order dashboard RPC unavailable; falling back to orders table.', err); }
+      if (!rpcWorked) {
+        try {
+          const orders = await cloudFetch('/rest/v1/orders?select=*&order=created_at.desc&limit=1000');
+          const validOrders = (Array.isArray(orders) ? orders : []).filter(o => {
+            const status = String(o.status || o.order_status || '').toLowerCase();
+            return !['cancelled', 'canceled', 'rejected', 'void', 'refunded'].includes(status);
+          });
+          orderCount = validOrders.length;
+          salesTotal = validOrders.reduce((sum, o) => sum + Number(o.total ?? o.total_amount ?? o.grand_total ?? 0), 0);
+          sold = validOrders.reduce((sum, o) => {
+            let rows = o.items || o.order_items || [];
+            try { if (typeof rows === 'string') rows = JSON.parse(rows); } catch (_) { rows = []; }
+            return sum + (Array.isArray(rows) ? rows.reduce((n, i) => n + Number(i.quantity ?? i.qty ?? 0), 0) : 0);
+          }, 0);
+        } catch (err) {
+          console.warn('Cannot read orders for dashboard metrics.', err);
+          statsSource = 'Order statistics unavailable';
+        }
+      }
+    }
+
+    document.getElementById('adminContent').innerHTML = `<div class="stats">
+      <div class="stat"><span>Total Products</span><strong>${data.products.length}</strong></div>
+      <div class="stat"><span>Total Categories</span><strong>${data.categories.length}</strong></div>
+      <div class="stat"><span>Total Collections</span><strong>${data.collections.length}</strong></div>
+      <div class="stat"><span>Total Stock</span><strong>${stock}</strong></div>
+      <div class="stat"><span>Low Stock</span><strong>${low}</strong></div>
+      <div class="stat"><span>Featured</span><strong>${featured}</strong></div>
+      <div class="stat"><span>বিক্রি/অর্ডার ইউনিট</span><strong>${sold}</strong></div>
+      <div class="stat"><span>মোট অর্ডার</span><strong>${orderCount}</strong></div>
+      <div class="stat"><span>অর্ডারের মোট মূল্য</span><strong>${money(salesTotal)}</strong><small style="display:block;color:#777;margin-top:4px">${escapeHtml(statsSource)}</small></div>
+    </div>
+    <div class="admin-panel"><div class="panel-head"><h3>Quick actions</h3></div><div style="display:flex;gap:9px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="openProductForm()">+ Add Product</button>
+      <button class="btn btn-outline" onclick="goAdmin('products')">Products</button>
+      <button class="btn btn-outline" onclick="goAdmin('categories')">Categories</button>
+      <button class="btn btn-outline" onclick="goAdmin('collections')">Collections</button>
+      <button class="btn btn-outline" onclick="goAdmin('orders')">Orders</button>
+      <button class="btn btn-outline" onclick="goAdmin('hero')">Hero</button>
+      <button class="btn btn-outline" onclick="goAdmin('colors')">Colors</button>
+      <button class="btn btn-outline" onclick="goAdmin('settings')">Settings</button>
+      <button class="btn btn-outline" onclick="goAdmin('backup')">Backup</button>
+      <button class="btn btn-outline" onclick="goAdmin('moderators')">Moderators</button>
+    </div></div>
+    <div class="admin-panel"><div class="panel-head"><h3>Latest products</h3><button class="btn btn-outline" onclick="goAdmin('products')">Manage all</button></div>
+      ${data.products.slice().sort((a,b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)).slice(0,5).map(p => `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #eee"><img class="table-img" src="${escapeAttr(productImage(p))}" alt=""><div style="flex:1"><strong>${escapeHtml(p.name)}</strong><div class="muted">${escapeHtml(p.category)} · ${money(p.price)}</div></div><span class="status ${p.visible ? '' : 'off'}">${p.visible ? 'Visible' : 'Hidden'}</span></div>`).join('') || '<div class="empty"><strong>No products yet</strong></div>'}
+    </div>`;
+  };
+
+  console.info('Rodela Style fix layer loaded.');
+})();
+
+</script>
+<script>
+/* RODELA STYLE FULL FIX LAYER 2 — schema-safe cloud sync and product metadata */
+(function () {
+  'use strict';
+
+  // Snapshot product IDs that were genuinely present in this browser before cloud products load.
+  // This avoids assigning the default category "Shirts" to products fetched on a brand-new device.
+  const rsKnownLocalProductIds = new Set(
+    Array.isArray(data?.products) ? data.products.map(p => String(p.id)) : []
+  );
+  const rsProductMetaEligibleIds = new Set(rsKnownLocalProductIds);
+  const rsUUID = value => typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const rsIsOwnerSession = () => !!(
+    supabaseOwnerSession?.user?.id &&
+    String(supabaseOwnerSession.user.id).toLowerCase() === String(RODELA_OWNER_UID).toLowerCase()
+  );
+
+  function rsGetDesign() {
+    if (!data.settings || typeof data.settings !== 'object') data.settings = {};
+    if (!data.settings.design || typeof data.settings.design !== 'object') data.settings.design = {};
+    return data.settings.design;
+  }
+
+  function rsCaptureProductMeta() {
+    const design = rsGetDesign();
+    const prior = design.productMeta && typeof design.productMeta === 'object' ? design.productMeta : {};
+    const next = { ...prior };
+    (Array.isArray(data.products) ? data.products : []).forEach(p => {
+      const id = String(p?.id || '');
+      if (!rsUUID(id)) return;
+      // Only create new metadata from products present in local cache, already known in the cloud
+      // metadata, or explicitly saved in this session. Do not invent category associations for
+      // remote-only products that have no saved category information.
+      if (!Object.prototype.hasOwnProperty.call(prior, id) && !rsProductMetaEligibleIds.has(id)) return;
+      next[id] = {
+        category: String(p.category || prior[id]?.category || ''),
+        collection: String(p.collection || prior[id]?.collection || ''),
+        oldPrice: Number(p.oldPrice ?? prior[id]?.oldPrice ?? 0),
+        featured: p.featured !== undefined ? !!p.featured : !!prior[id]?.featured,
+        isNew: p.isNew !== undefined ? !!p.isNew : !!prior[id]?.isNew,
+        sale: p.sale !== undefined ? !!p.sale : !!prior[id]?.sale
+      };
+    });
+    design.productMeta = next;
+    return next;
+  }
+
+  function rsApplyProductMeta() {
+    const meta = data.settings?.design?.productMeta || {};
+    data.products = (Array.isArray(data.products) ? data.products : []).map(p => {
+      const m = meta[String(p.id || '')];
+      if (!m) return p;
+      return {
+        ...p,
+        category: m.category || p.category || 'Shirts',
+        collection: m.collection ?? p.collection ?? '',
+        oldPrice: Number(m.oldPrice ?? p.oldPrice ?? 0),
+        featured: m.featured !== undefined ? !!m.featured : !!p.featured,
+        isNew: m.isNew !== undefined ? !!m.isNew : !!p.isNew,
+        sale: m.sale !== undefined ? !!m.sale : !!p.sale
+      };
+    });
+  }
+
+  // Support both the newer `theme` and older `themes` site_settings column without overwriting
+  // other values inside settings.design (notably productMeta).
+  fetchSiteSettings = async function () {
+    if (!supabaseClient) throw new Error('Supabase client is not configured.');
+    const { data: row, error } = await supabaseClient.from('site_settings')
+      .select('*').eq('id', 1).maybeSingle();
+    if (error) throw error;
+    if (!row) return null;
+    if (row.theme == null && row.themes != null) row.theme = row.themes;
+    return row;
+  };
+
+  saveSiteSettings = async function (reason = 'site settings save') {
+    if (!supabaseClient || !supabaseReady || !rsIsOwnerSession()) {
+      console.warn('Site settings were not written: owner session/cloud connection is not ready.', reason);
+      return false;
+    }
+    try {
+      if (typeof normalizeDesignState === 'function') normalizeDesignState();
+      const productMeta = rsCaptureProductMeta();
+      const previousDesign = data.settings?.design && typeof data.settings.design === 'object'
+        ? data.settings.design : {};
+      const cloudSettings = deepClone(data.settings || {});
+      cloudSettings.design = {
+        ...deepClone(previousDesign),
+        categories: deepClone(data.categories || []),
+        collections: deepClone(data.collections || []),
+        sections: deepClone(data.settings?.sections || []),
+        productMeta: deepClone(productMeta)
+      };
+      const base = {
+        id: 1,
+        hero: deepClone(data.hero || {}),
+        settings: cloudSettings,
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: currentRow, error: readError } = await supabaseClient.from('site_settings')
+        .select('*').eq('id', 1).maybeSingle();
+      if (readError) throw readError;
+      let candidates;
+      if (currentRow && Object.prototype.hasOwnProperty.call(currentRow, 'themes')) {
+        candidates = [{ ...base, themes: deepClone(data.theme || DEFAULT_THEME) }];
+      } else if (currentRow && Object.prototype.hasOwnProperty.call(currentRow, 'theme')) {
+        candidates = [{ ...base, theme: deepClone(data.theme || DEFAULT_THEME) }];
+      } else if (currentRow) {
+        candidates = [base];
+      } else {
+        candidates = [
+          { ...base, themes: deepClone(data.theme || DEFAULT_THEME) },
+          { ...base, theme: deepClone(data.theme || DEFAULT_THEME) },
+          base
+        ];
+      }
+
+      let lastError = null;
+      for (const payload of candidates) {
+        const { error } = await supabaseClient.from('site_settings').upsert(payload, { onConflict: 'id' });
+        if (!error) return true;
+        lastError = error;
+        const message = String(error.message || error.details || '').toLowerCase();
+        const columnMismatch = message.includes('column') || message.includes('schema cache') ||
+          message.includes('does not exist') || message.includes('could not find');
+        if (!columnMismatch) break;
+      }
+      throw lastError || new Error('site_settings could not be saved.');
+    } catch (err) {
+      console.error('Site settings cloud save failed:', reason, err);
+      return false;
+    }
+  };
+
+  syncSiteSettingsFromSupabase = async function () {
+    if (!supabaseClient) return;
+    const remote = await fetchSiteSettings();
+    if (!remote) {
+      if (rsIsOwnerSession()) await saveSiteSettings('initial site settings');
+      return;
+    }
+    const remoteSettings = remote.settings && typeof remote.settings === 'object' ? remote.settings : {};
+    const design = remoteSettings.design && typeof remoteSettings.design === 'object' ? remoteSettings.design : {};
+    const hasRemote = Object.keys(remote.hero || {}).length || Object.keys(remote.theme || {}).length || Object.keys(remoteSettings).length;
+    if (hasRemote) {
+      data.hero = mergeObject(DEFAULT_DATA.hero, remote.hero || {});
+      data.theme = mergeObject(DEFAULT_THEME, remote.theme || remote.themes || {});
+      data.settings = mergeObject(DEFAULT_DATA.settings, remoteSettings);
+      if (Array.isArray(design.categories)) data.categories = deepClone(design.categories);
+      if (Array.isArray(design.collections)) data.collections = deepClone(design.collections);
+      if (Array.isArray(design.sections)) data.settings.sections = deepClone(design.sections);
+      data.settings.design = deepClone(design);
+      data.categories = (data.categories || []).map((c, i) => ({ ...c, image: c.image || FALLBACK_IMG, order: Number(c.order) || i + 1, visible: c.visible !== false }));
+      data.collections = (data.collections || []).map((c, i) => ({ ...c, image: c.image || FALLBACK_IMG, order: Number(c.order) || i + 1, visible: c.visible !== false }));
+      data.settings.sections = (data.settings.sections || deepClone(DEFAULT_DATA.settings.sections)).map((s, i) => ({ ...s, order: Number(s.order) || i + 1, visible: s.visible !== false }));
+      rsApplyProductMeta();
+      rsCaptureProductMeta();
+      persist('cloud site settings load');
+      const designIncomplete = !Array.isArray(design.categories) || !Array.isArray(design.collections) || !Array.isArray(design.sections);
+      if (rsIsOwnerSession() && designIncomplete) await saveSiteSettings('design migration');
+    } else if (rsIsOwnerSession()) {
+      await saveSiteSettings('initial site settings migration');
+    }
+  };
+
+  // Normalize modern and legacy product rows while preserving the locally known display fields.
+  normalizeCloudProduct = function (row, localFallback = {}) {
+    const cat = (data.categories || []).find(c => row.category_id && String(c.id) === String(row.category_id));
+    const col = (data.collections || []).find(c => row.collection_id && String(c.id) === String(row.collection_id));
+    let image = row.image_url || localFallback.image || FALLBACK_IMG;
+    if ((!row.image_url || !String(row.image_url)) && row.image) {
+      if (typeof row.image === 'string') image = row.image;
+      else if (typeof row.image === 'object') image = row.image.url || row.image.image_url || image;
+    }
+    const gallery = Array.isArray(row.images) ? row.images :
+      (Array.isArray(row.image) ? row.image :
+      (Array.isArray(row.image?.gallery) ? row.image.gallery :
+      (Array.isArray(localFallback.images) ? localFallback.images : [])));
+    const activeValue = row.is_active !== undefined ? row.is_active : row.isActive;
+    return {
+      id: String(row.id ?? localFallback.id ?? uid('p')),
+      name: row.name || localFallback.name || 'Untitled Product',
+      category: cat?.name || row.category || localFallback.category || 'Shirts',
+      collection: col?.name || row.collection || localFallback.collection || '',
+      category_id: row.category_id || localFallback.category_id || null,
+      collection_id: row.collection_id || localFallback.collection_id || null,
+      price: Number(row.price ?? localFallback.price ?? 0),
+      oldPrice: Number(row.oldPrice ?? row.old_price ?? localFallback.oldPrice ?? 0),
+      stock: Math.max(0, Number(row.stock ?? localFallback.stock ?? 0)),
+      description: row.description ?? localFallback.description ?? '',
+      image,
+      images: gallery,
+      featured: localFallback.featured !== undefined ? !!localFallback.featured : !!row.featured,
+      isNew: localFallback.isNew !== undefined ? !!localFallback.isNew : !!(row.isNew ?? row.is_new),
+      sale: localFallback.sale !== undefined ? !!localFallback.sale : !!row.sale,
+      visible: activeValue !== false && localFallback.visible !== false,
+      createdAt: localFallback.createdAt || row.created_at || Date.now()
+    };
+  };
+
+  function rsImageJson(p) {
+    return { url: p.image || null, gallery: Array.isArray(p.images) ? p.images : [] };
+  }
+  function rsPayloadForKeys(p, keys, sample, mode = 'detected') {
+    const uuidId = rsUUID(String(p.id || ''));
+    const cat = (data.categories || []).find(c => c.name === p.category || (p.category_id && String(c.id) === String(p.category_id)));
+    const col = (data.collections || []).find(c => c.name === p.collection || (p.collection_id && String(c.id) === String(p.collection_id)));
+    const catId = cat && rsUUID(String(cat.id || '')) ? String(cat.id) : (rsUUID(String(p.category_id || '')) ? String(p.category_id) : null);
+    const colId = col && rsUUID(String(col.id || '')) ? String(col.id) : (rsUUID(String(p.collection_id || '')) ? String(p.collection_id) : null);
+    const modernColumns = new Set(['name','description','price','category_id','collection_id','image_url','images','sizes','colors','stock','is_active']);
+    const legacyColumns = new Set(['name','description','price','category_id','collection_id','image_url','image','images','size','color','stock','isActive']);
+    const has = key => keys ? keys.has(key) : (mode === 'legacy' ? legacyColumns.has(key) : modernColumns.has(key));
+    const out = {};
+    if (has('name')) out.name = p.name;
+    if (has('description')) out.description = p.description || '';
+    if (has('price')) out.price = Number(p.price || 0);
+    if (has('stock')) out.stock = Math.max(0, Number(p.stock || 0));
+    if (has('category_id')) out.category_id = catId;
+    if (has('collection_id')) out.collection_id = colId;
+    if (has('category')) out.category = p.category || '';
+    if (has('collection')) out.collection = p.collection || '';
+
+    const imageIsUrl = /^https?:\/\//i.test(String(p.image || '')) ? String(p.image) : null;
+    if (has('image_url')) out.image_url = imageIsUrl;
+    if (has('image')) {
+      const sampleImage = sample?.image;
+      out.image = typeof sampleImage === 'string' ? imageIsUrl : rsImageJson(p);
+    }
+    if (has('images')) out.images = Array.isArray(p.images) ? p.images : [];
+    if (has('size')) out.size = Array.isArray(p.sizes) ? p.sizes : [];
+    if (has('sizes')) out.sizes = Array.isArray(p.sizes) ? p.sizes : [];
+    if (has('color')) out.color = Array.isArray(p.colors) ? p.colors : [];
+    if (has('colors')) out.colors = Array.isArray(p.colors) ? p.colors : [];
+    if (has('is_active')) out.is_active = p.visible !== false;
+    if (has('isActive')) out.isActive = p.visible !== false;
+    if (has('oldPrice')) out.oldPrice = Number(p.oldPrice || 0);
+    if (has('old_price')) out.old_price = Number(p.oldPrice || 0);
+    if (has('featured')) out.featured = !!p.featured;
+    if (has('isNew')) out.isNew = !!p.isNew;
+    if (has('is_new')) out.is_new = !!p.isNew;
+    if (has('sale')) out.sale = !!p.sale;
+    if (uuidId) out.id = String(p.id);
+    return out;
+  }
+
+  upsertCloudProduct = async function (p) {
+    if (!supabaseReady) throw new Error('Supabase সংযোগ প্রস্তুত নয়; আগে owner login করে reload করুন।');
+    let sampleRows = [];
+    try { sampleRows = await cloudFetch('/rest/v1/products?select=*&limit=1'); } catch (_) { /* fall through to known schemas */ }
+    const sample = Array.isArray(sampleRows) ? sampleRows[0] : null;
+    const keys = sample ? new Set(Object.keys(sample)) : null;
+    const attempts = [];
+    if (keys) {
+      attempts.push(rsPayloadForKeys(p, keys, sample));
+    } else {
+      // Empty tables cannot advertise their schema. Retry only when the error indicates a column mismatch.
+      attempts.push(rsPayloadForKeys(p, null, null, 'modern'));
+      attempts.push(rsPayloadForKeys(p, null, null, 'legacy'));
+      attempts.push({
+        name: p.name, description: p.description || '', price: Number(p.price || 0),
+        category_id: null, collection_id: null, image: rsImageJson(p),
+        images: Array.isArray(p.images) ? p.images : [],
+        size: Array.isArray(p.sizes) ? p.sizes : [], color: Array.isArray(p.colors) ? p.colors : [],
+        stock: Math.max(0, Number(p.stock || 0)), isActive: p.visible !== false,
+        ...(rsUUID(String(p.id || '')) ? { id: String(p.id) } : {})
+      });
+      attempts.push({
+        name: p.name, description: p.description || '', price: Number(p.price || 0),
+        category: p.category || '', collection: p.collection || '',
+        image_url: /^https?:\/\//i.test(String(p.image || '')) ? p.image : null,
+        stock: Math.max(0, Number(p.stock || 0)), is_active: p.visible !== false,
+        ...(rsUUID(String(p.id || '')) ? { id: String(p.id) } : {})
+      });
+      attempts.push({
+        name: p.name, description: p.description || '', price: Number(p.price || 0),
+        category: p.category || '', collection: p.collection || '',
+        stock: Math.max(0, Number(p.stock || 0)),
+        ...(rsUUID(String(p.id || '')) ? { id: String(p.id) } : {})
+      });
+    }
+
+    let lastError = null;
+    for (const payload of attempts) {
+      try {
+        const rows = await cloudFetch('/rest/v1/products?on_conflict=id', {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+          body: JSON.stringify(payload)
+        });
+        const row = Array.isArray(rows) ? rows[0] : rows;
+        if (!row || !row.id) throw new Error('Supabase-এ Product row পাওয়া যায়নি। Products INSERT/UPDATE RLS policy পরীক্ষা করুন।');
+        const saved = normalizeCloudProduct(row, p);
+        rsProductMetaEligibleIds.add(String(saved.id));
+        return saved;
+      } catch (err) {
+        lastError = err;
+        const message = String(err?.message || err).toLowerCase();
+        const schemaMismatch = message.includes('column') || message.includes('schema cache') ||
+          message.includes('could not find') || message.includes('pgrst204') ||
+          message.includes('does not exist') || message.includes('unknown field');
+        if (!schemaMismatch) throw err;
+      }
+    }
+    throw lastError || new Error('Supabase-এ Product save করা যায়নি।');
+  };
+
+  // Intercept product form submit before the older submit handler. Additional images are uploaded
+  // to Supabase Storage too, so another device does not receive browser-only data URLs.
+  const productForm = document.getElementById('productForm');
+  if (productForm) {
+    let savingProduct = false;
+    productForm.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (savingProduct) return;
+      savingProduct = true;
+      const button = document.getElementById('productSaveBtn');
+      if (button) { button.disabled = true; button.textContent = 'Saving…'; }
+      try {
+        if (!can('products')) throw new Error('এই অ্যাকাউন্টে Product permission নেই।');
+        if (!supabaseReady || !rsIsOwnerSession()) throw new Error('Cloud-এ সেভ করার জন্য Rodela Style owner login এবং Supabase connection প্রয়োজন।');
+        const id = document.getElementById('productId').value;
+        const existing = id ? data.products.find(p => String(p.id) === String(id)) : null;
+        const mainFile = document.getElementById('pImage').files[0];
+        let image = existing?.image || FALLBACK_IMG;
+        if (mainFile) {
+          image = await uploadCloudImage(rsDataUrlToFile(await compressImage(mainFile, 1400, .82), 'product.jpg'));
+        } else if (supabaseReady && /^data:image\//i.test(String(image))) {
+          image = await uploadCloudImage(rsDataUrlToFile(image, 'product.jpg'));
+        }
+
+        const galleryFiles = [...document.getElementById('pAdditionalImages').files].slice(0, 8);
+        let images;
+        if (galleryFiles.length) {
+          images = [];
+          for (let i = 0; i < galleryFiles.length; i++) {
+            const compressed = await compressImage(galleryFiles[i], 1200, .78);
+            images.push(await uploadCloudImage(rsDataUrlToFile(compressed, `gallery-${i + 1}.jpg`)));
+          }
+        } else {
+          images = Array.isArray(tempAdditionalImages) ? tempAdditionalImages.slice() : (existing?.images || []);
+          const normalizedImages = [];
+          for (let i = 0; i < images.length; i++) {
+            const item = String(images[i] || '');
+            if (/^data:image\//i.test(item)) normalizedImages.push(await uploadCloudImage(rsDataUrlToFile(item, `gallery-${i + 1}.jpg`)));
+            else normalizedImages.push(item);
+          }
+          images = normalizedImages;
+        }
+
+        const product = {
+          id: id || uid('p'),
+          name: document.getElementById('pName').value.trim(),
+          category: document.getElementById('pCategory').value,
+          collection: document.getElementById('pCollection').value,
+          price: Number(document.getElementById('pPrice').value) || 0,
+          oldPrice: Number(document.getElementById('pOldPrice').value) || 0,
+          stock: Math.max(0, Number(document.getElementById('pStock').value) || 0),
+          description: document.getElementById('pDescription').value.trim(),
+          image, images,
+          featured: document.getElementById('pFeatured').checked,
+          isNew: document.getElementById('pNew').checked,
+          sale: document.getElementById('pSale').checked,
+          visible: document.getElementById('pVisible').checked,
+          createdAt: existing?.createdAt || Date.now()
+        };
+        if (!product.name) throw new Error('Product name লিখুন।');
+
+        const cloudProduct = await upsertCloudProduct(product);
+        const finalProduct = { ...product, ...cloudProduct };
+        rsProductMetaEligibleIds.add(String(finalProduct.id));
+        if (existing) {
+          const index = data.products.findIndex(p => String(p.id) === String(id));
+          if (index < 0) throw new Error('Local product state-এ edit করা product পাওয়া যায়নি।');
+          data.products[index] = finalProduct;
+        } else {
+          data.products.push(finalProduct);
+        }
+        if (!persist(existing ? 'product update' : 'product add')) throw new Error('Cloud save হয়েছে, কিন্তু browser-এর local data save হয়নি।');
+
+        const metaSaved = await saveSiteSettings('product metadata save');
+        renderAll();
+        renderAdminPage();
+        closeModal('productModal');
+        if (metaSaved) showToast(existing ? 'Product update ও cloud metadata save হয়েছে।' : 'Product add ও cloud metadata save হয়েছে।');
+        else showToast('Product Supabase-এ save হয়েছে, কিন্তু category/featured metadata cloud-এ save হয়নি। Settings/RLS পরীক্ষা করুন।', 'bad');
+      } catch (error) {
+        console.error('Hardened product save failed:', error);
+        showToast('Product save error: ' + (error?.message || error), 'bad');
+      } finally {
+        savingProduct = false;
+        if (button) { button.disabled = false; button.textContent = 'Save Product'; }
+      }
+    }, true);
+  }
+
+  function rsDataUrlToFile(dataUrl, name) {
+    const parts = String(dataUrl).split(',');
+    if (parts.length < 2) throw new Error('পুরোনো image data সঠিক নয়।');
+    const match = parts[0].match(/data:([^;]+);base64/i);
+    const mime = match ? match[1] : 'image/jpeg';
+    const binary = atob(parts[1]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new File([bytes], name, { type: mime });
+  }
+
+  console.info('Rodela Style full fix layer 2 loaded.');
+})();
+
+</script>
 </body>
 </html>
